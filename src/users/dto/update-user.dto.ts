@@ -5,8 +5,7 @@ export class UpdateUserDto {
     @IsNumber()
     id: number;
 
-    @IsNotEmpty()
-    roles: string[];
+    roles?: string[];
 
     password?: string;
 }
