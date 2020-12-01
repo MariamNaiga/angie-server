@@ -47,7 +47,7 @@ export class UsersController {
   async resetPassword(@Body() data: ResetPasswordDto) {
     return this.service.resetPassword(data.token, data.password);
   }
-
+  
   @Put()
   async update(@Body()data: UpdateUserDto): Promise<UserListDto> {
     return await this.service.update(data);
