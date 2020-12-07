@@ -1,4 +1,4 @@
-import {HttpException, Injectable} from '@nestjs/common';
+import {HttpException, Injectable, Logger} from '@nestjs/common';
 import {InjectRepository} from '@nestjs/typeorm';
 import {Repository} from 'typeorm';
 import {User} from './user.entity';
@@ -8,6 +8,8 @@ import {ContactsService} from '../crm/contacts.service';
 import Contact from '../crm/entities/contact.entity';
 import {UpdateUserDto} from "./dto/update-user.dto";
 import {UserListDto} from "./dto/user-list.dto";
+import {ResetPasswordResponseDto} from './dto/reset-password-response.dto';
+import {ForgotPasswordResponseDto} from './dto/forgot-password-response.dto';
 import {getPersonFullName} from "../crm/crm.helpers";
 import {hasValue} from "../utils/basicHelpers";
 import {QueryDeepPartialEntity} from "typeorm/query-builder/QueryPartialEntity";
@@ -105,8 +107,8 @@ export class UsersService {
         return count > 0;
     } 
 
-    async getUserToken(user: User): Promise<string> {
-        const payload = {"userId": user.id};
+    async getUserToken(userId): Promise<string> {
+        const payload = {"userId": userId};
         const token = await this.jwtService.signAsync(payload, {expiresIn: 60 * 10 * 1000}); // expires after 10 minutes
         return token;
     }
@@ -116,17 +118,17 @@ export class UsersService {
         return decoded;
     }
 
-    async resetPassword(token: string, newPassword: string): Promise<any> {
+    async resetPassword(token: string, newPassword: string): Promise<ResetPasswordResponseDto> {
         const decodedToken = await this.decodeToken(token);
-
+        let message;
         const data: UpdateUserDto = {
             id: decodedToken.userId,
             password: newPassword,
             roles: (await this.findOne(decodedToken.userId)).roles
-        } 
+        }
         const user = await this.update(data);
         if(!user) {
-            throw new HttpException("Password Not Updated", 404);
+            throw new HttpException("User Password Not Updated", 404);
         }
 
         const transporter = await this.mailTransporter();
@@ -140,38 +142,44 @@ export class UsersService {
                 <h4>Your Password has been changed successfully!<h4></br>
             `
         })
-        return `Password Change Successful! ${nodemailer.getTestMessageUrl(info)}`;
+        if (!info) {
+            message = "Password Change Failed";
+            throw new HttpException("Password Not Changed", 500);
+        } else {
+            message = "Password Change Successful"; 
+        }
+
+        const mailURL = nodemailer.getTestMessageUrl(info);
+        return { message, mailURL, user };
     }
 
-    async forgotPassword(username: string): Promise<string> {
-        const user = await this.findByName(username);
-        if (!user) {
+    async forgotPassword(username: string): Promise<ForgotPasswordResponseDto> {
+        const userExists = await this.findByName(username);
+        if (!userExists) {
             throw new HttpException("User Not Found", 404);
         }
         
-        const name = (await this.findOne(user.id)).fullName;
+        const user = (await this.findOne(userExists.id));
         
         const transporter = await this.mailTransporter();
-        const token = await this.getUserToken(user);
-        const resetLink = `http://localhost:4002/resetPassword/token=${ await this.getUserToken(user) }&`;
-        const dummyLink = 'https://www.google.com';
-
+        const token = await this.getUserToken(user.id);
+        const resetLink = `http://localhost:4002/resetPassword/token=${token}`;
         const info = await transporter.sendMail({
             from: "Worship Harvest",
             to: `${(await user).username}`,
             subject: "Reset Password", 
-            html: `
-                <h3>Hello ${name}</h3></br>
+            html: 
+            `
+                <h3>Hello ${user.fullName}</h3></br>
                 <h4>Here is a link to reset your Password!<h4></br>
-                <a href=${dummyLink}>Reset Password</a></br>
-                <p>** This link expires in 10 minutes **</p>
-                <p>For testing purposes, here is your token: ${token} </p>
-                <p>But this be the actual URL: ${resetLink}</p>
-          
+                <a href=${resetLink}>Reset Password</a>
+                <p>This link should expire in 10 minutes</p>
             `
         })
-        return `Email With Reset Link Sent! ${nodemailer.getTestMessageUrl(info)} \n Token: ${token} \n Reset Link: ${resetLink}`;
+        const mailURL = nodemailer.getTestMessageUrl(info);
+        return { token, mailURL, user }
     }
+
     async mailTransporter() {
         const testAccount = await nodemailer.createTestAccount();
 

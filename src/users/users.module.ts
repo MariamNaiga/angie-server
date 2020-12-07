@@ -2,7 +2,8 @@ import { Module } from '@nestjs/common';
 import { UsersService } from './users.service';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { usersEntities } from './users.helpers';
-import { UsersController } from './users.controller';
+import { UsersController } from './controllers/users.controller';
+import { UserController } from './controllers/user.controller'
 import { CrmModule } from '../crm/crm.module';
 import { crmEntities } from '../crm/crm.helpers';
 import { JwtModule } from '@nestjs/jwt';
@@ -20,7 +21,7 @@ import { JwtStrategy } from 'src/auth/strategies/jwt.strategy';
   ],
   providers: [UsersService, JwtStrategy],
   exports: [UsersService],
-  controllers: [UsersController],
+  controllers: [UsersController, UserController],
 })
 export class UsersModule {
 }
