@@ -1,4 +1,4 @@
-import {Injectable} from '@nestjs/common';
+import {HttpException, Injectable, Logger} from '@nestjs/common';
 import {InjectRepository} from '@nestjs/typeorm';
 import {Repository} from 'typeorm';
 import {User} from './user.entity';
@@ -8,9 +8,13 @@ import {ContactsService} from '../crm/contacts.service';
 import Contact from '../crm/entities/contact.entity';
 import {UpdateUserDto} from "./dto/update-user.dto";
 import {UserListDto} from "./dto/user-list.dto";
+import {ResetPasswordResponseDto} from './dto/reset-password-response.dto';
+import {ForgotPasswordResponseDto} from './dto/forgot-password-response.dto';
 import {getPersonFullName} from "../crm/crm.helpers";
 import {hasValue} from "../utils/basicHelpers";
 import {QueryDeepPartialEntity} from "typeorm/query-builder/QueryPartialEntity";
+import * as nodemailer from "nodemailer";
+import {JwtService} from '@nestjs/jwt';
 
 @Injectable()
 export class UsersService {
@@ -18,6 +22,7 @@ export class UsersService {
         @InjectRepository(User)
         private readonly repository: Repository<User>,
         private readonly contactsService: ContactsService,
+        private readonly jwtService: JwtService
     ) {
     }
 
@@ -93,12 +98,106 @@ export class UsersService {
         await this.repository.delete(id);
     }
 
-    async findByName(username: string): Promise<User | undefined> {
+    async findByName(username: string): Promise<User> | undefined {
         return this.repository.findOne({where: {username}, relations: ['contact', 'contact.person']});
     }
 
     async exits(username: string): Promise<boolean> {
         const count = await this.repository.count({where: {username}});
         return count > 0;
+    } 
+
+    async getUserToken(userId): Promise<string> {
+        const payload = {"userId": userId};
+        const token = await this.jwtService.signAsync(payload, {expiresIn: 60 * 10 * 1000}); // expires after 10 minutes
+        return token;
+    }
+
+    async decodeToken(token: string): Promise<any> {
+        const decoded = await this.jwtService.decode(token);
+        return decoded;
+    }
+
+    async resetPassword(token: string, newPassword: string): Promise<ResetPasswordResponseDto> {
+        const decodedToken = await this.decodeToken(token);
+        let message;
+        const data: UpdateUserDto = {
+            id: decodedToken.userId,
+            password: newPassword,
+            roles: (await this.findOne(decodedToken.userId)).roles
+        } 
+
+        const user = await this.update(data);
+        if(!user) {
+            throw new HttpException("User Password Not Updated", 404);
+        }
+
+        const transporter = await this.mailTransporter();
+        const info = await transporter.sendMail({
+            from: "Worship Harvest",
+            to: `${(await user).username}`,
+            subject: "Password Change Confirmation",
+            html: 
+            `
+                <h3>Hello ${(await user).fullName},</h3></br>
+                <h4>Your Password has been changed successfully!<h4></br>
+            `
+        })
+        
+        if (!info) {
+            message = "Password Change Failed";
+            throw new HttpException("Password Not Changed", 500);
+        } else {
+            message = "Password Change Successful"; 
+        }
+
+        const mailURL = nodemailer.getTestMessageUrl(info);
+        return { message, mailURL, user };
+    }
+
+    async forgotPassword(username: string): Promise<ForgotPasswordResponseDto> {
+        const userExists = await this.findByName(username);
+        if (!userExists) {
+            throw new HttpException("User Not Found", 404);
+        }
+        
+        const user = (await this.findOne(userExists.id));
+        
+        const transporter = await this.mailTransporter();
+        const token = await this.getUserToken(user.id);
+        const resetLink = `http://localhost:4002/resetPassword/token=${token}`;
+
+        const info = await transporter.sendMail({
+            from: "Worship Harvest",
+            to: `${(await user).username}`,
+            subject: "Reset Password", 
+            html: 
+            `
+                <h3>Hello ${user.fullName}</h3></br>
+                <h4>Here is a link to reset your Password!<h4></br>
+                <a href=${resetLink}>Reset Password</a>
+                <p>This link should expire in 10 minutes</p>
+            `
+        })
+        const mailURL = nodemailer.getTestMessageUrl(info);
+        return { token, mailURL, user }
+    }
+
+    async mailTransporter() {
+        const testAccount = await nodemailer.createTestAccount();
+
+        const transporter = nodemailer.createTransport({
+            host: "smtp.ethereal.email",
+            port: 587,
+            secure: false, // true for 465, false for other ports
+            auth: {
+                user: testAccount.user, // generated ethereal user
+                pass: testAccount.pass, // generated ethereal password
+            },
+        });
+        if(!transporter) {
+            throw new HttpException("Transporter Not Created", 404);
+        }
+        return transporter;
     }
 }
