@@ -1,4 +1,4 @@
-import {HttpException, Injectable, Logger} from '@nestjs/common';
+import {HttpException, Injectable} from '@nestjs/common';
 import {InjectRepository} from '@nestjs/typeorm';
 import {Repository} from 'typeorm';
 import {User} from './user.entity';
@@ -13,8 +13,8 @@ import {ForgotPasswordResponseDto} from './dto/forgot-password-response.dto';
 import {getPersonFullName} from "../crm/crm.helpers";
 import {hasValue} from "../utils/basicHelpers";
 import {QueryDeepPartialEntity} from "typeorm/query-builder/QueryPartialEntity";
-import * as nodemailer from "nodemailer";
 import {JwtService} from '@nestjs/jwt';
+import {IEmail, sendEmail} from 'src/utils/mailerTest';
 
 @Injectable()
 export class UsersService {
@@ -120,7 +120,6 @@ export class UsersService {
 
     async resetPassword(token: string, newPassword: string): Promise<ResetPasswordResponseDto> {
         const decodedToken = await this.decodeToken(token);
-        let message;
         const data: UpdateUserDto = {
             id: decodedToken.userId,
             password: newPassword,
@@ -131,26 +130,21 @@ export class UsersService {
             throw new HttpException("User Password Not Updated", 404);
         }
 
-        const transporter = await this.mailTransporter();
-        const info = await transporter.sendMail({
-            from: "Worship Harvest",
+        const mailerData: IEmail = {
             to: `${(await user).username}`,
             subject: "Password Change Confirmation",
-            html: 
+            html:
             `
                 <h3>Hello ${(await user).fullName},</h3></br>
                 <h4>Your Password has been changed successfully!<h4></br>
             `
-        })
-        if (!info) {
-            message = "Password Change Failed";
-            throw new HttpException("Password Not Changed", 500);
-        } else {
-            message = "Password Change Successful"; 
+        } 
+        const mailURL = await sendEmail(mailerData);
+        if (mailURL) {
+            const message = "Password Change Successful"
+            return { message, mailURL, user };
         }
-
-        const mailURL = nodemailer.getTestMessageUrl(info);
-        return { message, mailURL, user };
+        throw new HttpException("Password Not Changed", 400);
     }
 
     async forgotPassword(username: string): Promise<ForgotPasswordResponseDto> {
@@ -160,14 +154,12 @@ export class UsersService {
         }
         
         const user = (await this.findOne(userExists.id));
-        
-        const transporter = await this.mailTransporter();
         const token = await this.getUserToken(user.id);
         const resetLink = `http://localhost:4002/resetPassword/token=${token}`;
-        const info = await transporter.sendMail({
-            from: "Worship Harvest",
+
+        const mailerData: IEmail = {
             to: `${(await user).username}`,
-            subject: "Reset Password", 
+            subject: "Reset Password",
             html: 
             `
                 <h3>Hello ${user.fullName}</h3></br>
@@ -175,26 +167,8 @@ export class UsersService {
                 <a href=${resetLink}>Reset Password</a>
                 <p>This link should expire in 10 minutes</p>
             `
-        })
-        const mailURL = nodemailer.getTestMessageUrl(info);
-        return { token, mailURL, user }
-    }
-
-    async mailTransporter() {
-        const testAccount = await nodemailer.createTestAccount();
-
-        const transporter = nodemailer.createTransport({
-            host: "smtp.ethereal.email",
-            port: 587,
-            secure: false, // true for 465, false for other ports
-            auth: {
-                user: testAccount.user, // generated ethereal user
-                pass: testAccount.pass, // generated ethereal password
-            },
-        });
-        if(!transporter) {
-            throw new HttpException("Transporter Not Created", 404);
         }
-        return transporter;
+        const mailURL = await sendEmail(mailerData);
+        return { token, mailURL, user };
     }
 }
